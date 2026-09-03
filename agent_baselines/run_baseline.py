@@ -60,6 +60,7 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--limit", type=int, default=None)
     parser.add_argument("--dry-run", action="store_true", help="Only normalize records; do not load models")
     parser.add_argument("--continue-on-error", action="store_true")
+    parser.add_argument("--resume", action="store_true", help="Append to an existing JSONL and skip completed qids")
     return parser
 
 
@@ -143,8 +144,21 @@ def main() -> None:
     controller = controller_cls(**controller_kwargs)
     output_path = Path(args.output)
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    with output_path.open("w", encoding="utf-8") as handle:
+    completed = set()
+    if args.resume and output_path.exists():
+        with output_path.open(encoding="utf-8") as previous:
+            for line in previous:
+                try:
+                    item = json.loads(line)
+                    if item.get("qid"):
+                        completed.add(str(item["qid"]))
+                except json.JSONDecodeError:
+                    continue
+    mode = "a" if args.resume else "w"
+    with output_path.open(mode, encoding="utf-8") as handle:
         for index, request in enumerate(requests):
+            if request.qid in completed:
+                continue
             try:
                 output = controller.run(request)
                 result = {
