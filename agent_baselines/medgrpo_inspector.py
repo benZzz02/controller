@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import sys
+import json
+from urllib.request import Request, urlopen
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -194,3 +196,24 @@ class MedGRPOInspector:
                 "end_sec": candidate.end_sec,
             },
         )
+
+
+class RemoteMedGRPOInspector:
+    """Call a MedGRPOInspector hosted by the separate vllm environment."""
+
+    def __init__(self, endpoint: str, timeout: int = 1800) -> None:
+        self.endpoint = endpoint.rstrip("/")
+        self.timeout = timeout
+
+    def inspect(self, request: VideoRequest, candidate: ClipCandidate) -> InspectionResult:
+        payload = {
+            "request": {"qid": request.qid, "video_id": request.video_id, "question": request.question,
+                        "video_path": request.video_path, "fps": request.fps},
+            "candidate": {"clip_id": candidate.clip_id, "video_id": candidate.video_id,
+                          "start_sec": candidate.start_sec, "end_sec": candidate.end_sec,
+                          "score": candidate.score, "metadata": candidate.metadata},
+        }
+        body = json.dumps(payload).encode("utf-8")
+        response = urlopen(Request(self.endpoint, data=body, headers={"Content-Type": "application/json"}), timeout=self.timeout)
+        result = json.loads(response.read().decode("utf-8"))
+        return InspectionResult(text=result["text"], metadata=result.get("metadata", {}))

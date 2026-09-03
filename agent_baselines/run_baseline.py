@@ -9,7 +9,7 @@ from typing import Any
 
 from .controller import ModelAnswer, SurgicalController, VideoRequest
 from .hf_video_answer import SurgPubVideoAnswerModel
-from .medgrpo_inspector import MedGRPOInspector
+from .medgrpo_inspector import MedGRPOInspector, RemoteMedGRPOInspector
 from .surgclip_retriever import SurgCLIPRetriever
 from .surgpub import load_surgpub_requests
 
@@ -30,6 +30,7 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--controller-model", default=None, help="SurgLLaVA-Video or compatible HF checkpoint")
     parser.add_argument("--controller-backend", choices=("auto", "qwen2_5_vl", "tinyllava"), default="auto")
     parser.add_argument("--inspector-model", default=None, help="MedGRPO HF checkpoint")
+    parser.add_argument("--inspector-endpoint", default=None, help="Remote MedGRPO service URL")
     parser.add_argument("--surg-lavi-root", default=None)
     parser.add_argument("--surgpub-root", default=None)
     parser.add_argument("--medgrpo-root", default=None)
@@ -78,8 +79,8 @@ def main() -> None:
 
     if args.mode in ("direct", "retrieve", "adaptive") and not args.controller_model:
         raise SystemExit(f"--controller-model is required for mode={args.mode}")
-    if args.mode in ("inspect", "adaptive") and not args.inspector_model:
-        raise SystemExit(f"--inspector-model is required for mode={args.mode}")
+    if args.mode in ("inspect", "adaptive") and not (args.inspector_model or args.inspector_endpoint):
+        raise SystemExit(f"--inspector-model or --inspector-endpoint is required for mode={args.mode}")
 
     retriever = None
     if args.mode != "direct":
@@ -106,7 +107,9 @@ def main() -> None:
         )
 
     inspector = None
-    if args.inspector_model:
+    if args.inspector_endpoint:
+        inspector = RemoteMedGRPOInspector(args.inspector_endpoint)
+    elif args.inspector_model:
         inspector = MedGRPOInspector(
             args.inspector_model,
             medgrpo_root=args.medgrpo_root,
