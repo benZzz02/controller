@@ -11,6 +11,7 @@ from __future__ import annotations
 import json
 import csv
 import html
+import re
 from functools import lru_cache
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence
@@ -154,13 +155,15 @@ def _normalize_record(
         frame_paths = _path_list(record.get("frame_paths", metadata.get("frame_paths")), data_root)
     if not frame_paths and data_root is not None and record.get("folder"):
         frame_dir = data_root / "frames" / str(record["folder"])
+        if not list(frame_dir.glob("*.png")):
+            frame_dir = frame_dir / "frames"
         frame_paths = [str(item) for item in sorted(frame_dir.glob("*.png"))]
     if video_path is None:
         video_path = _as_path(record.get("video_path", metadata.get("video_path")), data_root)
 
     fps = _number(record, metadata, ("fps", "video_fps", "frame_rate"))
-    start_sec = _number(record, metadata, ("start_sec", "video_start", "clip_start"))
-    end_sec = _number(record, metadata, ("end_sec", "video_end", "clip_end"))
+    start_sec = _number(record, metadata, ("start_sec", "start", "video_start", "clip_start"))
+    end_sec = _number(record, metadata, ("end_sec", "end", "video_end", "clip_end"))
     if start_sec is None or end_sec is None:
         start_frame = _number(record, metadata, ("start_frame", "video_start_frame"))
         end_frame = _number(record, metadata, ("end_frame", "video_end_frame"))
@@ -168,6 +171,19 @@ def _normalize_record(
             start_sec = start_frame / fps
         if fps and end_sec is None and end_frame is not None:
             end_sec = end_frame / fps
+
+    if frame_paths and record.get("folder") and start_sec is not None and end_sec is not None:
+        # Official SurgPub evaluation samples the annotated time interval from
+        # the 1-fps extracted frames.
+        first_frame = int(start_sec)
+        last_frame = int(end_sec)
+        selected = []
+        for frame_path in frame_paths:
+            match = re.search(r"frame_(\d+)\.[^.]+$", frame_path)
+            if match and first_frame <= int(match.group(1)) <= last_frame:
+                selected.append(frame_path)
+        if selected:
+            frame_paths = selected
 
     video_id = str(record.get("video_id") or metadata.get("video_id") or record.get("folder") or "").strip()
     if not video_id:
@@ -200,6 +216,9 @@ def _normalize_record(
     }
     if video_id.isdigit():
         normalized_metadata["video_id"] = video_id
+    choices = {key: str(record[key]).strip() for key in ("A", "B", "C", "D") if record.get(key) not in (None, "")}
+    if choices:
+        normalized_metadata["choices"] = choices
     if video_path and not explicit_video_path:
         normalized_metadata["mapped_original_video"] = True
     if frame_paths:

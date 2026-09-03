@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import sys
 import json
+import time
 from urllib.request import Request, urlopen
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -214,6 +215,15 @@ class RemoteMedGRPOInspector:
                           "score": candidate.score, "metadata": candidate.metadata},
         }
         body = json.dumps(payload).encode("utf-8")
-        response = urlopen(Request(self.endpoint, data=body, headers={"Content-Type": "application/json"}), timeout=self.timeout)
-        result = json.loads(response.read().decode("utf-8"))
+        error = None
+        for attempt in range(3):
+            try:
+                response = urlopen(Request(self.endpoint, data=body, headers={"Content-Type": "application/json"}), timeout=self.timeout)
+                result = json.loads(response.read().decode("utf-8"))
+                break
+            except Exception as exc:
+                error = exc
+                if attempt == 2:
+                    raise
+                time.sleep(2 ** attempt)
         return InspectionResult(text=result["text"], metadata=result.get("metadata", {}))

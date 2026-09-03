@@ -4,6 +4,9 @@ from __future__ import annotations
 
 import argparse
 import json
+import logging
+import threading
+import traceback
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from agent_baselines.controller import ClipCandidate, VideoRequest
@@ -20,6 +23,7 @@ def main() -> None:
     args = parser.parse_args()
     inspector = MedGRPOInspector(args.model, medgrpo_root=args.medgrpo_root, device=args.device, quantized=True)
     inspector._load_backend()
+    inference_lock = threading.Lock()
 
     class Handler(BaseHTTPRequestHandler):
         def do_POST(self) -> None:
@@ -30,10 +34,14 @@ def main() -> None:
                 c = data["candidate"]
                 request = VideoRequest(**r)
                 candidate = ClipCandidate(**c)
-                result = inspector.inspect(request, candidate)
+                # Qwen2.5-VL generation is kept serial even if clients retry
+                # or a future runner becomes concurrent.
+                with inference_lock:
+                    result = inspector.inspect(request, candidate)
                 body = json.dumps({"text": result.text, "metadata": result.metadata}, ensure_ascii=False).encode()
                 self.send_response(200)
             except Exception as error:
+                traceback.print_exc()
                 body = json.dumps({"error": f"{type(error).__name__}: {error}"}).encode()
                 self.send_response(500)
             self.send_header("Content-Type", "application/json")

@@ -239,6 +239,10 @@ class HuggingFaceVideoAnswerModel:
         if not frames:
             raise ValueError(f"No frames available for request {request.qid}")
         prompt = f"Question: {request.question}"
+        choices = request.metadata.get("choices") or {}
+        if choices:
+            prompt += "\nOptions:\n" + "\n".join(f"{key}: {choices[key]}" for key in ("A", "B", "C", "D") if key in choices)
+            prompt += "\nReturn only the letter of the correct option (A, B, C, or D)."
         if evidence:
             prompt += f"\nIndependent medical inspection evidence:\n{evidence}\nRe-evaluate the answer."
         if draft:
