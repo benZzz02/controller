@@ -1,0 +1,35 @@
+# Python/runtime artifacts
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.venv/
+venv/
+env/
+.env
+
+# Model/data caches and generated predictions
+*.pth
+*.safetensors
+*.ckpt
+results/
+outputs/
+predictions/
+cache/
+tmp/
+
+# LaTeX build artifacts and local PDF renders
+*.aux
+*.bbl
+*.bcf
+*.blg
+*.brf
+*.fdb_latexmk
+*.fls
+*.log
+*.out
+*.run.xml
+*.synctex.gz
+*.toc
+*.pdf
