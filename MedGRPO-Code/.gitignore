@@ -1,0 +1,22 @@
+# Model files (download from Hugging Face)
+models/
+
+# Python cache
+__pycache__/
+*.py[cod]
+*.so
+
+# Results and logs (user-generated)
+results
+
+# IDE / OS
+.vscode/
+run_inference_lingshu*.sh
+.idea/
+.venv*
+.DS_Store
+*.swp
+
+# Temp
+*.tmp
+*.log

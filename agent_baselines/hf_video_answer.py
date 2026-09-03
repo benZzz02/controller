@@ -31,6 +31,7 @@ class HuggingFaceVideoAnswerModel:
         max_new_tokens: int = 256,
         num_frames: int = 16,
         vision_processor_root: str | Path | None = None,
+        surgpub_root: str | Path | None = None,
     ) -> None:
         self.model_path = model_path
         self.backend = backend
@@ -40,6 +41,7 @@ class HuggingFaceVideoAnswerModel:
         self.max_new_tokens = max_new_tokens
         self.num_frames = num_frames
         self.vision_processor_root = Path(vision_processor_root) if vision_processor_root else None
+        self.surgpub_root = Path(surgpub_root) if surgpub_root else None
         self.processor: Any = None
         self.model: Any = None
         self._process_vision_info: Any = None
@@ -49,6 +51,32 @@ class HuggingFaceVideoAnswerModel:
             return
         import torch
         from transformers import AutoProcessor
+
+        if self.backend == "tinyllava":
+            if self.surgpub_root and str(self.surgpub_root) not in sys.path:
+                sys.path.insert(0, str(self.surgpub_root))
+            from tinyllava.model.load_model import load_pretrained_model
+
+            self.model, self.tokenizer, self.image_processor, _ = load_pretrained_model(
+                self.model_path,
+                load_4bit=self.quantized,
+                device=self.device,
+            )
+            self.model = self.model.to(self.device).eval()
+            from tinyllava.data.image_preprocess import ImagePreprocess
+            from tinyllava.data.video_preprocess import VideoPreprocess
+            from tinyllava.data.text_preprocess import TextPreprocess
+            from tinyllava.utils.message import Message
+
+            self._tiny = {
+                "ImagePreprocess": ImagePreprocess,
+                "VideoPreprocess": VideoPreprocess,
+                "TextPreprocess": TextPreprocess,
+                "Message": Message,
+            }
+            self._tiny_video_preprocess = VideoPreprocess(self.image_processor, self.model.config)
+            self._tiny_text_preprocess = TextPreprocess(self.tokenizer, "qwen2_base")
+            return
 
         try:
             self.processor = AutoProcessor.from_pretrained(
@@ -176,6 +204,29 @@ class HuggingFaceVideoAnswerModel:
             inputs = self.processor(**processor_kwargs)
         return inputs.to(self._model_device())
 
+    def _answer_tinyllava(self, request: VideoRequest, frames: list[Any], prompt: str) -> ModelAnswer:
+        import torch
+
+        message = self._tiny["Message"]()
+        message.add_message(f"<image>\n{prompt}")
+        encoded = self._tiny_text_preprocess(message.messages, mode="eval")
+        input_ids = encoded["input_ids"].unsqueeze(0).to(self.device)
+        video = torch.stack([self._tiny_video_preprocess(frame) for frame in frames]).unsqueeze(0)
+        with torch.inference_mode():
+            output_ids = self.model.generate(
+                input_ids,
+                images=None,
+                video=video,
+                do_sample=False,
+                temperature=0.0,
+                num_beams=1,
+                pad_token_id=self.tokenizer.pad_token_id,
+                max_new_tokens=self.max_new_tokens,
+                use_cache=True,
+            )
+        output = self.tokenizer.batch_decode(output_ids, skip_special_tokens=True)[0].strip()
+        return ModelAnswer(text=output, metadata={"model": self.model_path, "backend": "tinyllava", "num_frames": len(frames)})
+
     def answer(
         self,
         request: VideoRequest,
@@ -192,6 +243,8 @@ class HuggingFaceVideoAnswerModel:
             prompt += f"\nIndependent medical inspection evidence:\n{evidence}\nRe-evaluate the answer."
         if draft:
             prompt += f"\nPrevious draft:\n{draft}\nReturn a corrected final answer."
+        if self.backend == "tinyllava":
+            return self._answer_tinyllava(request, frames, prompt)
         inputs = self._build_inputs(request, frames, prompt)
 
         import torch

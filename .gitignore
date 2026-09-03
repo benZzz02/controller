@@ -33,3 +33,4 @@ tmp/
 *.synctex.gz
 *.toc
 *.pdf
+*.egg-info/

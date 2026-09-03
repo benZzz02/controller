@@ -34,6 +34,7 @@ class SurgCLIPRetriever:
         window_sec: float = 8.0,
         stride_sec: float = 4.0,
         max_windows: Optional[int] = 64,
+        search_full_video: bool = True,
     ) -> None:
         self.surg_lavi_root = Path(surg_lavi_root) if surg_lavi_root else _default_surg_lavi_root()
         self.model_name = model_name
@@ -42,6 +43,7 @@ class SurgCLIPRetriever:
         self.window_sec = window_sec
         self.stride_sec = stride_sec
         self.max_windows = max_windows
+        self.search_full_video = search_full_video
         self._surgclip: Any = None
         self.model: Any = None
         self.preprocessor: Any = None
@@ -87,6 +89,14 @@ class SurgCLIPRetriever:
         return fps, duration, max(start, end)
 
     def _ranges(self, request: VideoRequest) -> List[Tuple[float, float]]:
+        if request.video_path and self.search_full_video:
+            _, duration, _ = video_info(request.video_path)
+            return sample_ranges(
+                duration_sec=duration,
+                window_sec=self.window_sec,
+                stride_sec=self.stride_sec,
+                max_windows=self.max_windows,
+            )
         if request.frame_paths:
             fps, duration, end = self._duration_and_range(request)
             del fps
@@ -106,7 +116,7 @@ class SurgCLIPRetriever:
     def _load_frames(self, request: VideoRequest, start_sec: float, end_sec: float) -> List[Any]:
         # SurgPub frame lists usually already represent the annotated clip; do
         # not apply absolute video timestamps as list indices a second time.
-        if request.frame_paths:
+        if request.frame_paths and not (request.video_path and self.search_full_video):
             return load_frame_inputs(frame_paths=request.frame_paths, num_frames=self.num_frames)
         return load_frame_inputs(
             video_path=request.video_path,
@@ -133,6 +143,11 @@ class SurgCLIPRetriever:
         with torch.inference_mode():
             _, pooled = self.model.encode_vision(video)
             projected = self.model.vision_proj(pooled)
+            # Some SurgCLIP checkpoints return one projected embedding per
+            # temporal token (B, T, D), while others return (B, D).
+            # Retrieval needs one vector for the complete window.
+            if projected.ndim == 3:
+                projected = projected.mean(dim=1)
             return F.normalize(projected, dim=-1)
 
     def search(self, request: VideoRequest, top_k: int = 5) -> List[ClipCandidate]:
@@ -153,7 +168,8 @@ class SurgCLIPRetriever:
                     continue
                 video_embedding = self._video_embedding(frames)
                 self._embedding_cache[clip_id] = video_embedding.detach().cpu()
-            score = float((video_embedding @ text_embedding.T).squeeze().item())
+            score_tensor = video_embedding @ text_embedding.T
+            score = float(score_tensor.reshape(-1).mean().item())
             metadata = {
                 "retriever": self.model_name,
                 "video_path": request.video_path,

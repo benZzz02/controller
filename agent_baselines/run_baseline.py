@@ -28,9 +28,10 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--output", required=True, help="Output JSONL prediction/trace file")
     parser.add_argument("--mode", choices=("direct", "retrieve", "inspect", "adaptive"), default="adaptive")
     parser.add_argument("--controller-model", default=None, help="SurgLLaVA-Video or compatible HF checkpoint")
-    parser.add_argument("--controller-backend", choices=("auto", "qwen2_5_vl"), default="auto")
+    parser.add_argument("--controller-backend", choices=("auto", "qwen2_5_vl", "tinyllava"), default="auto")
     parser.add_argument("--inspector-model", default=None, help="MedGRPO HF checkpoint")
     parser.add_argument("--surg-lavi-root", default=None)
+    parser.add_argument("--surgpub-root", default=None)
     parser.add_argument("--medgrpo-root", default=None)
     parser.add_argument("--device-controller", default="cuda:0")
     parser.add_argument("--device-inspector", default="cuda:1")
@@ -101,6 +102,7 @@ def main() -> None:
             max_new_tokens=args.max_new_tokens,
             num_frames=args.num_frames,
             vision_processor_root=args.medgrpo_root,
+            surgpub_root=args.surgpub_root,
         )
 
     inspector = None

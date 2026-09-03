@@ -9,14 +9,21 @@ It does not copy or modify the dataset media.
 from __future__ import annotations
 
 import json
+import csv
+import html
+from functools import lru_cache
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence
+from urllib.parse import urlparse
 
 from .controller import VideoRequest
 
 
 def _read_json_or_jsonl(path: str | Path) -> List[Dict[str, Any]]:
     path = Path(path)
+    if path.suffix.lower() == ".csv":
+        with path.open(newline="", encoding="utf-8-sig") as handle:
+            return [dict(row) for row in csv.DictReader(handle)]
     text = path.read_text(encoding="utf-8")
     try:
         loaded = json.loads(text)
@@ -46,7 +53,14 @@ def _first_text(record: Mapping[str, Any], role: str) -> Optional[str]:
         if source in accepted:
             value = item.get("value", item.get("content", item.get("text")))
             if value is not None:
-                return str(value).replace("<video>\n", "").replace("<video>", "").strip()
+                return (
+                    str(value)
+                    .replace("<video>\n", "")
+                    .replace("<video>", "")
+                    .replace("<image>\n", "")
+                    .replace("<image>", "")
+                    .strip()
+                )
     return None
 
 
@@ -77,10 +91,52 @@ def _number(record: Mapping[str, Any], metadata: Mapping[str, Any], keys: Sequen
     return None
 
 
+@lru_cache(maxsize=8)
+def _video_url_map(csv_path: str) -> Dict[str, str]:
+    """Map SurgPub's numeric video IDs to Wistia media hashes."""
+
+    mapping: Dict[str, str] = {}
+    with Path(csv_path).open(newline="", encoding="utf-8-sig") as handle:
+        for row in csv.DictReader(handle):
+            video_id = str(row.get("id", "")).strip()
+            raw_url = html.unescape(str(row.get("video_url", "")).strip())
+            if not video_id or not raw_url:
+                continue
+            path = urlparse(raw_url if "://" in raw_url else f"https:{raw_url}").path.rstrip("/")
+            media_hash = path.split("/")[-1] if path else ""
+            if media_hash and media_hash != "iframe":
+                mapping.setdefault(video_id, media_hash)
+    return mapping
+
+
+def _mapped_video_path(
+    video_id: str,
+    *,
+    data_root: Optional[Path],
+    csv_path: Optional[str | Path],
+    video_root: Optional[str | Path],
+) -> Optional[str]:
+    """Resolve a numeric dataset ID to an existing local original video."""
+
+    root = Path(video_root) if video_root is not None else (data_root / "surgpub_videos" if data_root else Path("/data/SurgPub/surgpub_videos"))
+    source_csv = Path(csv_path) if csv_path is not None else (data_root / "video_url.csv" if data_root else Path("/data/SurgPub/video_url.csv"))
+    if not source_csv.exists() or not root.exists():
+        return None
+    media_hash = _video_url_map(str(source_csv)).get(str(video_id).strip())
+    if not media_hash:
+        return None
+    for candidate in (root / f"{media_hash}.mp4", root / f"{media_hash}_original.mp4"):
+        if candidate.is_file():
+            return str(candidate)
+    return None
+
+
 def _normalize_record(
     record: Mapping[str, Any],
     index: int,
     data_root: Optional[Path],
+    video_csv: Optional[str | Path],
+    video_root: Optional[str | Path],
 ) -> VideoRequest:
     metadata = record.get("metadata") if isinstance(record.get("metadata"), dict) else {}
     video_value = record.get("video", record.get("frames"))
@@ -96,6 +152,9 @@ def _normalize_record(
 
     if not frame_paths:
         frame_paths = _path_list(record.get("frame_paths", metadata.get("frame_paths")), data_root)
+    if not frame_paths and data_root is not None and record.get("folder"):
+        frame_dir = data_root / "frames" / str(record["folder"])
+        frame_paths = [str(item) for item in sorted(frame_dir.glob("*.png"))]
     if video_path is None:
         video_path = _as_path(record.get("video_path", metadata.get("video_path")), data_root)
 
@@ -110,16 +169,26 @@ def _normalize_record(
         if fps and end_sec is None and end_frame is not None:
             end_sec = end_frame / fps
 
-    video_id = str(
-        record.get("video_id")
-        or metadata.get("video_id")
-        or (Path(video_path).stem if video_path else (Path(frame_paths[0]).parent.name if frame_paths else f"video_{index}"))
-    )
+    video_id = str(record.get("video_id") or metadata.get("video_id") or record.get("folder") or "").strip()
+    if not video_id:
+        if video_path:
+            video_id = Path(video_path).stem
+        elif frame_paths:
+            frame_path = Path(frame_paths[0])
+            # The native SurgPub layout is ``<numeric-video-id>/frames/*.png``.
+            video_id = frame_path.parent.parent.name if frame_path.parent.name == "frames" else frame_path.parent.name
+        else:
+            video_id = f"video_{index}"
+    explicit_video_path = video_path is not None
+    if video_path is None and video_id.isdigit():
+        video_path = _mapped_video_path(video_id, data_root=data_root, csv_path=video_csv, video_root=video_root)
     qid = str(record.get("qid") or record.get("question_id") or record.get("id") or f"surgpub_{index:06d}")
-    question = record.get("question") or record.get("query") or _first_text(record, "question")
+    question = record.get("question") or record.get("query") or record.get("question_closed") or _first_text(record, "question")
     if question is None:
         raise ValueError(f"Record {index} has no question field")
     answer = record.get("answer") or record.get("label") or _first_text(record, "answer")
+    if answer is None and record.get("answer_key"):
+        answer = record.get(str(record["answer_key"]).strip())
 
     normalized_metadata: Dict[str, Any] = {
         "dataset": "SurgPub-Video",
@@ -129,6 +198,10 @@ def _normalize_record(
         "data_source": record.get("data_source"),
         "raw_metadata": dict(metadata),
     }
+    if video_id.isdigit():
+        normalized_metadata["video_id"] = video_id
+    if video_path and not explicit_video_path:
+        normalized_metadata["mapped_original_video"] = True
     if frame_paths:
         normalized_metadata["frame_paths"] = frame_paths
     if video_path:
@@ -155,6 +228,8 @@ def load_surgpub_requests(
     *,
     data_root: str | Path | None = None,
     limit: Optional[int] = None,
+    video_csv: str | Path | None = None,
+    video_root: str | Path | None = None,
 ) -> List[VideoRequest]:
     """Load SurgPub-Video JSON/JSONL into canonical controller requests."""
 
@@ -162,7 +237,10 @@ def load_surgpub_requests(
     records = _read_json_or_jsonl(path)
     if limit is not None:
         records = records[:limit]
-    return [_normalize_record(record, index, root) for index, record in enumerate(records)]
+    return [
+        _normalize_record(record, index, root, video_csv, video_root)
+        for index, record in enumerate(records)
+    ]
 
 
 def request_to_medgrpo_record(request: VideoRequest) -> Dict[str, Any]:
