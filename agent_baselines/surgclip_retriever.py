@@ -9,6 +9,7 @@ reuse them without decoding the video a second time.
 from __future__ import annotations
 
 import sys
+import hashlib
 from dataclasses import replace
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Tuple
@@ -35,6 +36,7 @@ class SurgCLIPRetriever:
         stride_sec: float = 4.0,
         max_windows: Optional[int] = 64,
         search_full_video: bool = True,
+        cache_dir: str | Path | None = None,
     ) -> None:
         self.surg_lavi_root = Path(surg_lavi_root) if surg_lavi_root else _default_surg_lavi_root()
         self.model_name = model_name
@@ -44,6 +46,9 @@ class SurgCLIPRetriever:
         self.stride_sec = stride_sec
         self.max_windows = max_windows
         self.search_full_video = search_full_video
+        self.cache_dir = Path(cache_dir) if cache_dir else None
+        if self.cache_dir:
+            self.cache_dir.mkdir(parents=True, exist_ok=True)
         self._surgclip: Any = None
         self.model: Any = None
         self.preprocessor: Any = None
@@ -51,6 +56,41 @@ class SurgCLIPRetriever:
         # Keep embeddings on CPU so repeated VQA questions for one video do
         # not occupy additional VRAM.  Frames are loaded only for Top-K.
         self._embedding_cache: Dict[str, Any] = {}
+        self._loaded_cache_files: set[str] = set()
+
+    def _cache_file(self, request: VideoRequest) -> Optional[Path]:
+        if not self.cache_dir or not request.video_path:
+            return None
+        path = Path(request.video_path)
+        identity = f"{path.resolve()}:{path.stat().st_size}:{self.num_frames}:{self.window_sec}:{self.stride_sec}:{self.max_windows}"
+        digest = hashlib.sha1(identity.encode()).hexdigest()[:20]
+        return self.cache_dir / f"{request.video_id}_{digest}.pt"
+
+    def _load_persistent_cache(self, request: VideoRequest) -> None:
+        cache_file = self._cache_file(request)
+        if cache_file is None or str(cache_file) in self._loaded_cache_files or not cache_file.exists():
+            return
+        import torch
+
+        saved = torch.load(cache_file, map_location="cpu", weights_only=False)
+        if isinstance(saved, dict):
+            self._embedding_cache.update(saved)
+        self._loaded_cache_files.add(str(cache_file))
+
+    def _save_persistent_cache(self, request: VideoRequest) -> None:
+        cache_file = self._cache_file(request)
+        if cache_file is None:
+            return
+        import torch
+
+        relevant = {item.clip_id: self._embedding_cache[item.clip_id] for item in self._candidates_for_request(request) if item.clip_id in self._embedding_cache}
+        if relevant:
+            temporary = cache_file.with_suffix(".tmp")
+            torch.save(relevant, temporary)
+            temporary.replace(cache_file)
+
+    def _candidates_for_request(self, request: VideoRequest) -> List[ClipCandidate]:
+        return [ClipCandidate(clip_id=f"{request.video_id}:{start:.3f}-{end:.3f}", video_id=request.video_id, start_sec=start, end_sec=end, score=0.0) for start, end in self._ranges(request)]
 
     def _load_backend(self) -> None:
         if self.model is not None:
@@ -154,6 +194,7 @@ class SurgCLIPRetriever:
         if top_k < 1:
             raise ValueError("top_k must be positive")
         self._load_backend()
+        self._load_persistent_cache(request)
         text_embedding = self._text_embedding(request.question)
         candidates: List[ClipCandidate] = []
         for index, (start_sec, end_sec) in enumerate(self._ranges(request)):
@@ -189,6 +230,7 @@ class SurgCLIPRetriever:
                 )
             )
         candidates.sort(key=lambda item: item.score, reverse=True)
+        self._save_persistent_cache(request)
         selected = candidates[:top_k]
         # The just-computed candidate may have frames in the local variable,
         # but cached candidates intentionally do not.  Materialize only the

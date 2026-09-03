@@ -41,6 +41,7 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--window-sec", type=float, default=8.0)
     parser.add_argument("--stride-sec", type=float, default=4.0)
     parser.add_argument("--max-windows", type=int, default=64)
+    parser.add_argument("--cache-dir", default=None, help="Persistent on-demand SurgCLIP embedding cache")
     parser.add_argument("--max-new-tokens", type=int, default=256)
     parser.add_argument("--inspector-max-pixels", type=int, default=24 * 28 * 28)
     parser.add_argument("--inspector-min-pixels", type=int, default=8 * 28 * 28)
@@ -91,6 +92,7 @@ def main() -> None:
             window_sec=args.window_sec,
             stride_sec=args.stride_sec,
             max_windows=args.max_windows,
+            cache_dir=args.cache_dir,
         )
 
     answer_model: Any = _UnusedAnswerModel()
