@@ -1,8 +1,11 @@
-# No-training controller
+# No-training controller runtime
 
-`SurgicalController` is the orchestration layer for frozen-model baselines. It
-does not learn a policy and does not require LangGraph, `verl`, or an external
-agent library.
+`LangGraphSurgicalController` is the recommended orchestration layer for the
+frozen-model baselines. It does not learn a policy: LangGraph provides the
+explicit state machine, conditional routing, bounded tool call, checkpoint
+identity, and node-level streaming needed for reproducible agent experiments.
+`SurgicalController` remains as a dependency-light reference implementation for
+unit tests and exact lightweight ablations.
 
 Inject three frozen adapters:
 
@@ -15,24 +18,35 @@ Inspector   = released MedGRPO 7B inference wrapper
 The four modes correspond to the baseline matrix:
 
 ```python
-SurgicalController(answer_model, mode="direct")
-SurgicalController(answer_model, retriever, mode="retrieve")
-SurgicalController(answer_model, retriever, inspector, mode="inspect")
-SurgicalController(answer_model, retriever, inspector, mode="adaptive")
+LangGraphSurgicalController(answer_model, mode="direct")
+LangGraphSurgicalController(answer_model, retriever, mode="retrieve")
+LangGraphSurgicalController(answer_model, retriever, inspector, mode="inspect")
+LangGraphSurgicalController(answer_model, retriever, inspector, mode="adaptive")
 ```
 
-The actual model-serving code belongs in adapters, not in the controller. The
+The adaptive graph is deliberately constrained:
+
+```text
+retrieve -> draft -> rule gate -> [stop | inspect once -> final rethink]
+```
+
+The actual model-serving code belongs in adapters, not in the runtime. The
 controller records retrieval results, gate reasons, tool calls, answer stages,
-and latency in a common trace.
+checkpoint thread id, and latency in a common trace. Raw video frames are kept
+outside graph state; checkpoints contain only serializable requests and clip
+metadata.
 
 ## Installation
 
-The controller itself has no heavyweight import-time dependency. On a GPU
-machine, install the runtime dependencies from:
+On a GPU machine, install the runtime dependencies from:
 
 ```bash
 pip install -r requirements-baseline.txt
 ```
+
+The default CLI runtime is LangGraph. Use `--runtime lightweight` when you
+need the pure-Python reference path or when checking the controller without
+installing the graph runtime.
 
 The adapter adds the local `SurgLaVi/src/surgclip` package to `sys.path` and
 therefore does not require installing the whole SurgLaVi repository. The
@@ -58,6 +72,7 @@ python -m agent_baselines.run_baseline \
   --data-root /path/to/surgpub_media \
   --output /path/to/results/adaptive.jsonl \
   --mode adaptive \
+  --runtime langgraph \
   --controller-model /path/to/SurgLLaVA-Video-3B \
   --inspector-model /path/to/uAI-NEXUS-MedVLM-1.0a-7B-RL \
   --device-controller cuda:0 \
@@ -72,7 +87,18 @@ python -m agent_baselines.run_baseline \
 `--mode inspect` only needs the MedGRPO checkpoint and answers from the
 retrieved Top-1 clip. `--mode retrieve` measures the controller after
 SurgCLIP retrieval without MedGRPO. `--mode adaptive` uses the fixed rule gate
-and makes at most one inspector call per question.
+and makes at most one inspector call per question. The output trace includes
+the selected graph path and per-node latency, so the same JSONL format can be
+used for lightweight-vs-LangGraph equivalence checks.
+
+## Why LangGraph instead of the neighboring VideoAgent repository?
+
+The neighboring `VideoAgent` code is useful as a generic ReAct/LangGraph
+reference, but it assumes API-backed agents and a broader tool manager. This
+baseline needs local frozen checkpoints, two explicit GPU placements, fixed
+retrieval windows, and a matched one-call inspection budget. The local
+LangGraph runtime keeps those scientific constraints explicit while leaving a
+future learned policy free to replace only the gate/router.
 
 The generic controller model adapter is ready for a checkpoint registered by
 Transformers. The published SurgLLaVA-Video model is based on TinyLLaVA-Video;

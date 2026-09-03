@@ -8,3 +8,4 @@ torchvision>=0.19
 transformers>=4.49
 huggingface-hub>=0.24
 qwen-vl-utils>=0.0.10
+langgraph>=0.2,<2

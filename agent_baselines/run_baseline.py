@@ -9,6 +9,7 @@ from typing import Any
 
 from .controller import ModelAnswer, SurgicalController, VideoRequest
 from .hf_video_answer import SurgPubVideoAnswerModel
+from .langgraph_controller import LangGraphSurgicalController
 from .medgrpo_inspector import MedGRPOInspector, RemoteMedGRPOInspector
 from .surgclip_retriever import SurgCLIPRetriever
 from .surgpub import load_surgpub_requests
@@ -27,6 +28,12 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--data-root", default=None, help="Root used to resolve relative media paths")
     parser.add_argument("--output", required=True, help="Output JSONL prediction/trace file")
     parser.add_argument("--mode", choices=("direct", "retrieve", "inspect", "adaptive"), default="adaptive")
+    parser.add_argument(
+        "--runtime",
+        choices=("langgraph", "lightweight"),
+        default="langgraph",
+        help="Execution runtime; LangGraph is the recommended reproducible runtime",
+    )
     parser.add_argument("--controller-model", default=None, help="SurgLLaVA-Video or compatible HF checkpoint")
     parser.add_argument("--controller-backend", choices=("auto", "qwen2_5_vl", "tinyllava"), default="auto")
     parser.add_argument("--inspector-model", default=None, help="MedGRPO HF checkpoint")
@@ -37,6 +44,7 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--device-controller", default="cuda:0")
     parser.add_argument("--device-inspector", default="cuda:1")
     parser.add_argument("--top-k", type=int, default=5)
+    parser.add_argument("--max-attempts", type=int, default=2, help="Bounded retries for model/tool calls")
     parser.add_argument("--num-frames", type=int, default=16)
     parser.add_argument("--window-sec", type=float, default=8.0)
     parser.add_argument("--stride-sec", type=float, default=4.0)
@@ -122,13 +130,17 @@ def main() -> None:
             min_pixels=args.inspector_min_pixels,
         )
 
-    controller = SurgicalController(
-        answer_model=answer_model,
-        retriever=retriever,
-        inspector=inspector,
-        mode=args.mode,
-        top_k=args.top_k,
-    )
+    controller_cls = LangGraphSurgicalController if args.runtime == "langgraph" else SurgicalController
+    controller_kwargs: dict[str, Any] = {
+        "answer_model": answer_model,
+        "retriever": retriever,
+        "inspector": inspector,
+        "mode": args.mode,
+        "top_k": args.top_k,
+    }
+    if args.runtime == "langgraph":
+        controller_kwargs["max_attempts"] = args.max_attempts
+    controller = controller_cls(**controller_kwargs)
     output_path = Path(args.output)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     with output_path.open("w", encoding="utf-8") as handle:

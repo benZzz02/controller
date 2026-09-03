@@ -8,10 +8,12 @@ cost under a fixed budget.
 
 The current implementation is intentionally small: released SurgCLIP retrieval,
 a frozen SurgLLaVA-Video/SurgPub-compatible controller, a frozen MedGRPO
-inspector, and a validation-calibrated deterministic gate. It makes one first
-look, then either stops or verifies once using the retrieved temporal window.
-The controller is model-agnostic so the same traces can later support learned
-agent-RL policies.
+inspector, and a validation-calibrated deterministic gate. The recommended
+runtime is a constrained LangGraph state machine: it makes one first look,
+then either stops or verifies once using the retrieved temporal window. A
+dependency-light controller is retained for matched ablations. The adapters
+and trace schema are model-agnostic so the same runtime can later support a
+learned agent-RL policy.
 
 The draft intentionally uses `TODO` markers for every unverified experiment
 number, exact split count, and implementation choice. No result in this

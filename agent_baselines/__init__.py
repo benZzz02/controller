@@ -9,6 +9,7 @@ from .controller import (
     SurgicalController,
     VideoRequest,
 )
+from .langgraph_controller import GraphState, LangGraphSurgicalController
 from .hf_video_answer import HuggingFaceVideoAnswerModel, SurgPubVideoAnswerModel
 from .medgrpo_inspector import MedGRPOInspector
 from .surgclip_retriever import SurgCLIPRetriever
@@ -22,6 +23,8 @@ __all__ = [
     "RuleGate",
     "SurgicalController",
     "VideoRequest",
+    "GraphState",
+    "LangGraphSurgicalController",
     "HuggingFaceVideoAnswerModel",
     "SurgPubVideoAnswerModel",
     "MedGRPOInspector",
