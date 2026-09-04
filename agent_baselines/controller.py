@@ -226,7 +226,20 @@ class SurgicalController:
         assert self.inspector is not None
 
         if self.mode == "inspect":
-            inspection = self.inspector.inspect(request, top1)
+            try:
+                inspection = self.inspector.inspect(request, top1)
+            except Exception as error:
+                trace["tool_calls"].append({"name": "inspect_clip", "status": "failed", "error": f"{type(error).__name__}: {error}"})
+                answer = self._normalize_answer(
+                    self.answer_model.answer(
+                        request,
+                        candidate=top1,
+                        evidence="MedGRPO did not return usable evidence. Use the retrieved video clip and your own visual judgment.",
+                    )
+                )
+                trace["answer_stage"] = "fallback_after_inspection_error"
+                trace["latency_sec"] = perf_counter() - started
+                return ControllerOutput(answer=answer, trace=trace)
             trace["tool_calls"].append(
                 {
                     "name": "inspect_clip",
@@ -248,7 +261,24 @@ class SurgicalController:
         trace["gate"] = {"called": should_call, "reasons": reasons}
 
         if should_call:
-            inspection = self.inspector.inspect(request, top1)
+            try:
+                inspection = self.inspector.inspect(request, top1)
+            except Exception as error:
+                trace["tool_calls"].append({"name": "inspect_clip", "status": "failed", "error": f"{type(error).__name__}: {error}"})
+                trace["answer_stage"] = "fallback_after_inspection_error"
+                trace["latency_sec"] = perf_counter() - started
+                try:
+                    answer = self._normalize_answer(
+                        self.answer_model.answer(
+                            request,
+                            candidate=top1,
+                            evidence="MedGRPO did not return usable evidence. Use the retrieved video clip and your own visual judgment.",
+                            draft=draft.text,
+                        )
+                    )
+                except Exception:
+                    answer = draft
+                return ControllerOutput(answer=answer, trace=trace)
             trace["tool_calls"].append(
                 {
                     "name": "inspect_clip",
